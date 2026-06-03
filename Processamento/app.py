@@ -1,6 +1,6 @@
 from ast import While
-
 import mysql.connector
+import json
 
 # Configurações de conexão com o banco de dados
 print("Configure a conexão com o banco de dados MySQL")
@@ -19,27 +19,37 @@ db = mysql.connector.connect(
 
 cursor = db.cursor()
 
+# Leitura dos arquivos JSON de teste
+with open(r"usuario-teste.json", "r") as f:
+    usuario = json.load(f)
+
+with open(r"ingresso-teste.json", "r") as f:
+    ingresso = json.load(f)
+
+with open(r"pedido-teste.json", "r") as f:
+    pedido = json.load(f)
+
 # Criação das funções de cadastro
 
 def cadastrar_usuario():
     print("Cadastro de Usuário")
-    nome = input("Nome: ")
-    email = input("Email: ")
-    senha = input("Senha: ")
-    tipo = input("Tipo (admin 1/usuario 0): ")
+    nome = usuario.get("nome")
+    email = usuario.get("email")
+    senha = usuario.get("senha")
+    admin = usuario.get("admin")
 
     sql = "INSERT INTO Usuarios (Usuario_Nome, Usuario_Email, Usuario_Senha, Usuario_Admin) VALUES (%s, %s, %s, %s);"
-    val = (nome, email, senha, tipo)
+    val = (nome, email, senha, admin)
     cursor.execute(sql, val)
     db.commit()
     print("Usuário cadastrado com sucesso!")
 
 def cadastrar_ingresso():
     print("Cadastro de Ingresso")
-    nome = input("Nome do Evento: ")
-    data = input("Data do Evento (YYYY-MM-DD): ")
-    valor = input("Preço: ")
-    quantidade = input("Quantidade: ")
+    nome = ingresso.get("nome")
+    data = ingresso.get("data")
+    valor = ingresso.get("valor")
+    quantidade = ingresso.get("quantidade")
 
     sql = "INSERT INTO Ingressos (Ingresso_Nome, Ingresso_Data, Ingresso_Valor, Ingresso_Quantidade) VALUES (%s, %s, %s, %s)"
     val = (nome, data, valor, quantidade)
@@ -49,11 +59,11 @@ def cadastrar_ingresso():
 
 def cadastrar_pedido():
     print("Cadastro de Pedido")
-    id_usuario = input("ID do Usuário: ")
-    id_ingresso = input("ID do Ingresso: ")
-    tipo_pagamento = input("Tipo de Pagamento (credido/boleto/PIX): ")
-    quantidade = input("Quantidade: ")
-    valor_total = input("Valor Total: ")
+    id_usuario = pedido.get("usuario_id")
+    id_ingresso = pedido.get("ingresso_id")
+    tipo_pagamento = pedido.get("tipo_pagamento")
+    quantidade = pedido.get("quantidade")
+    valor_total = pedido.get("valor_total")
 
     sql = "INSERT INTO Pedidos (Usuario_ID, Ingresso_ID, Pedido_Tipo_Pag, Pedido_QNT_Ingressos, Pedido_Valor) VALUES (%s, %s, %s, %s, %s)"
     val = (id_usuario, id_ingresso, tipo_pagamento, quantidade, valor_total)
@@ -65,25 +75,25 @@ def cadastrar_pedido():
 
 def editar_usuario():
     print("Edição de Usuário")
-    id_usuario = input("ID do Usuário a ser editado: ")
-    nome = input("Novo Nome: ")
-    email = input("Novo Email: ")
-    senha = input("Nova Senha: ")
-    tipo = input("Novo Tipo (admin 1/usuario 0): ")
+    id_usuario = usuario.get("usuario_id")
+    nome = usuario.get("nome")
+    email = usuario.get("email")
+    senha = usuario.get("senha")
+    admin = usuario.get("admin")
 
     sql = "UPDATE Usuarios SET Usuario_Nome = %s, Usuario_Email = %s, Usuario_Senha = %s, Usuario_Admin = %s WHERE Usuario_ID = %s"
-    val = (nome, email, senha, tipo, id_usuario)
+    val = (nome, email, senha, admin, id_usuario)
     cursor.execute(sql, val)
     db.commit()
     print("Usuário editado com sucesso!")
 
 def editar_ingresso():
     print("Edição de Ingresso")
-    id_ingresso = input("ID do Ingresso a ser editado: ")
-    nome = input("Novo Nome do Evento: ")
-    data = input("Nova Data do Evento (YYYY-MM-DD): ")
-    valor = input("Novo Preço: ")
-    quantidade = input("Nova Quantidade: ")
+    id_ingresso = ingresso.get("ingresso_id")
+    nome = ingresso.get("nome")
+    data = ingresso.get("data")
+    valor = ingresso.get("valor")
+    quantidade = ingresso.get("quantidade")
 
     sql = "UPDATE Ingressos SET Ingresso_Nome = %s, Ingresso_Data = %s, Ingresso_Valor = %s, Ingresso_Quantidade = %s WHERE Ingresso_ID = %s"
     val = (nome, data, valor, quantidade, id_ingresso)
@@ -93,12 +103,12 @@ def editar_ingresso():
 
 def editar_pedido():
     print("Edição de Pedido")
-    id_pedido = input("ID do Pedido a ser editado: ")
-    id_usuario = input("Novo ID do Usuário: ")
-    id_ingresso = input("Novo ID do Ingresso: ")
-    tipo_pagamento = input("Novo Tipo de Pagamento (credido/boleto/PIX): ")
-    quantidade = input("Nova Quantidade: ")
-    valor_total = input("Novo Valor Total: ")
+    id_pedido = pedido.get("pedido_id")
+    id_usuario = pedido.get("usuario_id")
+    id_ingresso = pedido.get("ingresso_id")
+    tipo_pagamento = pedido.get("tipo_pagamento")
+    quantidade = pedido.get("quantidade")
+    valor_total = pedido.get("valor_total")
 
     sql = "UPDATE Pedidos SET Usuario_ID = %s, Ingresso_ID = %s, Pedido_Tipo_Pag = %s, Pedido_QNT_Ingressos = %s, Pedido_Valor = %s WHERE Pedido_ID = %s"
     val = (id_usuario, id_ingresso, tipo_pagamento, quantidade, valor_total, id_pedido)
@@ -110,7 +120,7 @@ def editar_pedido():
 
 def excluir_usuario():
     print("Exclusão de Usuário")
-    id_usuario = input("ID do Usuário a ser excluído: ")
+    id_usuario = usuario.get("usuario_id")
 
     sql = "DELETE FROM Usuarios WHERE Usuario_ID = %s"
     val = (id_usuario,)
@@ -120,7 +130,7 @@ def excluir_usuario():
 
 def excluir_ingresso():
     print("Exclusão de Ingresso")
-    id_ingresso = input("ID do Ingresso a ser excluído: ")
+    id_ingresso = ingresso.get("ingresso_id")
 
     sql = "DELETE FROM Ingressos WHERE Ingresso_ID = %s"
     val = (id_ingresso,)
@@ -130,7 +140,7 @@ def excluir_ingresso():
 
 def excluir_pedido():
     print("Exclusão de Pedido")
-    id_pedido = input("ID do Pedido a ser excluído: ")
+    id_pedido = pedido.get("pedido_id")
 
     sql = "DELETE FROM Pedidos WHERE Pedido_ID = %s"
     val = (id_pedido,)
@@ -161,7 +171,7 @@ def mostrar_tabela():
 
 # Criação de uma função para exibir o menu
 
-def menu():
+def menu_manual():
     print("Menu:")
     print("1. Cadastros")
     print("2. Edições")
@@ -211,5 +221,28 @@ def menu():
         print("Saindo...")
         exit()
 
-while True:
-    menu()
+# Criação de uma função para executar as operações automaticamente com base nos arquivos JSON
+
+def main_auto():
+    if usuario.get("operacao") == "Cadastro":
+        cadastrar_usuario()
+    elif usuario.get("operacao") == "Edicao":
+        editar_usuario()
+    elif usuario.get("operacao") == "Exclusao":
+        excluir_usuario()
+
+    if ingresso.get("operacao") == "Cadastro":
+        cadastrar_ingresso()
+    elif ingresso.get("operacao") == "Edicao":
+        editar_ingresso()
+    elif ingresso.get("operacao") == "Exclusao":
+        excluir_ingresso()
+
+    if pedido.get("operacao") == "Cadastro":
+        cadastrar_pedido()
+    elif pedido.get("operacao") == "Edicao":
+        editar_pedido()
+    elif pedido.get("operacao") == "Exclusao":
+        excluir_pedido()
+
+main_auto()
