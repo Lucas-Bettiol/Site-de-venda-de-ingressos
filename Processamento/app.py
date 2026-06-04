@@ -1,107 +1,174 @@
-from ast import While
-import mysql.connector
+import os
 import json
+import time
+import mysql.connector
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
-# Configurações de conexão com o banco de dados
-print("Configure a conexão com o banco de dados MySQL")
-host = input("Host: ")
-user = input("User: ")
-password = input("Password: ")
-database = input("Database: ")
+# Configurações
+print("Configure as conexões com o banco de dados e AWS SQS:")
+rds_host = input("Host: ")
+rds_user = input("User: ")
+rds_password = input("Password: ")
+rds_database = input("Database: ")
+regiao = os.getenv("AWS_REGION", "us-east-1")
+sqs_url_usuarios = input("URL da fila SQS de Usuários: ")
+sqs_url_ingressos = input("URL da fila SQS de Ingressos: ")
+sqs_url_pedidos = input("URL da fila SQS de Pedidos: ")
 
 # Conexão com o banco de dados
-db = mysql.connector.connect(
-    host=host,
-    user=user,
-    password=password,
-    database=database
-)
+try:
+    db = mysql.connector.connect(
+        host=rds_host,
+        user=rds_user,
+        password=rds_password,
+        database=rds_database
+    )
+except mysql.connector.Error as err:
+    print(f"Erro ao conectar no banco de dados: {err}")
+    raise
 
 cursor = db.cursor()
+sqs = boto3.client("sqs", region_name=regiao)
 
-# Leitura dos arquivos JSON de teste
-with open(r"usuario-teste.json", "r") as f:
-    usuario = json.load(f)
+# Helper SQS
 
-with open(r"ingresso-teste.json", "r") as f:
-    ingresso = json.load(f)
+def parse_sqs_body(body):
+    if isinstance(body, str):
+        return json.loads(body)
+    if isinstance(body, dict):
+        return body
+    raise ValueError("Corpo da mensagem SQS inválido")
 
-with open(r"pedido-teste.json", "r") as f:
-    pedido = json.load(f)
 
-# Criação das funções de cadastro
+def receive_sqs_message(queue_url):
+    try:
+        response = sqs.receive_message(
+            QueueUrl=queue_url,
+            MaxNumberOfMessages=1,
+            WaitTimeSeconds=10,
+            VisibilityTimeout=30
+        )
+    except (BotoCoreError, ClientError) as err:
+        print(f"Erro ao receber mensagem SQS: {err}")
+        return None, None
 
-def cadastrar_usuario():
+    messages = response.get("Messages")
+    if not messages:
+        return None, None
+
+    message = messages[0]
+    receipt_handle = message.get("ReceiptHandle")
+    body = message.get("Body")
+
+    try:
+        payload = parse_sqs_body(body)
+    except ValueError as err:
+        print(err)
+        return None, None
+
+    return payload, receipt_handle
+
+
+def delete_sqs_message(queue_url, receipt_handle):
+    if not receipt_handle:
+        return
+    try:
+        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+    except (BotoCoreError, ClientError) as err:
+        print(f"Erro ao excluir mensagem SQS: {err}")
+
+# Operações de banco de dados
+
+def cadastrar_usuario(usuario):
     print("Cadastro de Usuário")
     nome = usuario.get("nome")
     email = usuario.get("email")
     senha = usuario.get("senha")
     admin = usuario.get("admin")
-
     sql = "INSERT INTO Usuarios (Usuario_Nome, Usuario_Email, Usuario_Senha, Usuario_Admin) VALUES (%s, %s, %s, %s);"
     val = (nome, email, senha, admin)
     cursor.execute(sql, val)
     db.commit()
     print("Usuário cadastrado com sucesso!")
 
-def cadastrar_ingresso():
-    print("Cadastro de Ingresso")
-    nome = ingresso.get("nome")
-    data = ingresso.get("data")
-    valor = ingresso.get("valor")
-    quantidade = ingresso.get("quantidade")
 
-    sql = "INSERT INTO Ingressos (Ingresso_Nome, Ingresso_Data, Ingresso_Valor, Ingresso_Quantidade) VALUES (%s, %s, %s, %s)"
-    val = (nome, data, valor, quantidade)
-    cursor.execute(sql, val)
-    db.commit()
-    print("Ingresso cadastrado com sucesso!")
-
-def cadastrar_pedido():
-    print("Cadastro de Pedido")
-    id_usuario = pedido.get("usuario_id")
-    id_ingresso = pedido.get("ingresso_id")
-    tipo_pagamento = pedido.get("tipo_pagamento")
-    quantidade = pedido.get("quantidade")
-    valor_total = pedido.get("valor_total")
-
-    sql = "INSERT INTO Pedidos (Usuario_ID, Ingresso_ID, Pedido_Tipo_Pag, Pedido_QNT_Ingressos, Pedido_Valor) VALUES (%s, %s, %s, %s, %s)"
-    val = (id_usuario, id_ingresso, tipo_pagamento, quantidade, valor_total)
-    cursor.execute(sql, val)
-    db.commit()
-    print("Pedido cadastrado com sucesso!")
-
-# Criação das funções de edição
-
-def editar_usuario():
+def editar_usuario(usuario):
     print("Edição de Usuário")
     id_usuario = usuario.get("usuario_id")
     nome = usuario.get("nome")
     email = usuario.get("email")
     senha = usuario.get("senha")
     admin = usuario.get("admin")
-
     sql = "UPDATE Usuarios SET Usuario_Nome = %s, Usuario_Email = %s, Usuario_Senha = %s, Usuario_Admin = %s WHERE Usuario_ID = %s"
     val = (nome, email, senha, admin, id_usuario)
     cursor.execute(sql, val)
     db.commit()
     print("Usuário editado com sucesso!")
 
-def editar_ingresso():
+
+def excluir_usuario(usuario):
+    print("Exclusão de Usuário")
+    id_usuario = usuario.get("usuario_id")
+    sql = "DELETE FROM Usuarios WHERE Usuario_ID = %s"
+    val = (id_usuario,)
+    cursor.execute(sql, val)
+    db.commit()
+    print("Usuário excluído com sucesso!")
+
+
+def cadastrar_ingresso(ingresso):
+    print("Cadastro de Ingresso")
+    nome = ingresso.get("nome")
+    data = ingresso.get("data")
+    valor = ingresso.get("valor")
+    quantidade = ingresso.get("quantidade")
+    sql = "INSERT INTO Ingressos (Ingresso_Nome, Ingresso_Data, Ingresso_Valor, Ingresso_Quantidade) VALUES (%s, %s, %s, %s)"
+    val = (nome, data, valor, quantidade)
+    cursor.execute(sql, val)
+    db.commit()
+    print("Ingresso cadastrado com sucesso!")
+
+
+def editar_ingresso(ingresso):
     print("Edição de Ingresso")
     id_ingresso = ingresso.get("ingresso_id")
     nome = ingresso.get("nome")
     data = ingresso.get("data")
     valor = ingresso.get("valor")
     quantidade = ingresso.get("quantidade")
-
     sql = "UPDATE Ingressos SET Ingresso_Nome = %s, Ingresso_Data = %s, Ingresso_Valor = %s, Ingresso_Quantidade = %s WHERE Ingresso_ID = %s"
     val = (nome, data, valor, quantidade, id_ingresso)
     cursor.execute(sql, val)
     db.commit()
     print("Ingresso editado com sucesso!")
 
-def editar_pedido():
+
+def excluir_ingresso(ingresso):
+    print("Exclusão de Ingresso")
+    id_ingresso = ingresso.get("ingresso_id")
+    sql = "DELETE FROM Ingressos WHERE Ingresso_ID = %s"
+    val = (id_ingresso,)
+    cursor.execute(sql, val)
+    db.commit()
+    print("Ingresso excluído com sucesso!")
+
+
+def cadastrar_pedido(pedido):
+    print("Cadastro de Pedido")
+    id_usuario = pedido.get("usuario_id")
+    id_ingresso = pedido.get("ingresso_id")
+    tipo_pagamento = pedido.get("tipo_pagamento")
+    quantidade = pedido.get("quantidade")
+    valor_total = pedido.get("valor_total")
+    sql = "INSERT INTO Pedidos (Usuario_ID, Ingresso_ID, Pedido_Tipo_Pag, Pedido_QNT_Ingressos, Pedido_Valor) VALUES (%s, %s, %s, %s, %s)"
+    val = (id_usuario, id_ingresso, tipo_pagamento, quantidade, valor_total)
+    cursor.execute(sql, val)
+    db.commit()
+    print("Pedido cadastrado com sucesso!")
+
+
+def editar_pedido(pedido):
     print("Edição de Pedido")
     id_pedido = pedido.get("pedido_id")
     id_usuario = pedido.get("usuario_id")
@@ -109,140 +176,87 @@ def editar_pedido():
     tipo_pagamento = pedido.get("tipo_pagamento")
     quantidade = pedido.get("quantidade")
     valor_total = pedido.get("valor_total")
-
     sql = "UPDATE Pedidos SET Usuario_ID = %s, Ingresso_ID = %s, Pedido_Tipo_Pag = %s, Pedido_QNT_Ingressos = %s, Pedido_Valor = %s WHERE Pedido_ID = %s"
     val = (id_usuario, id_ingresso, tipo_pagamento, quantidade, valor_total, id_pedido)
     cursor.execute(sql, val)
     db.commit()
     print("Pedido editado com sucesso!")
 
-# Criação das funções de exclusão
 
-def excluir_usuario():
-    print("Exclusão de Usuário")
-    id_usuario = usuario.get("usuario_id")
-
-    sql = "DELETE FROM Usuarios WHERE Usuario_ID = %s"
-    val = (id_usuario,)
-    cursor.execute(sql, val)
-    db.commit()
-    print("Usuário excluído com sucesso!")
-
-def excluir_ingresso():
-    print("Exclusão de Ingresso")
-    id_ingresso = ingresso.get("ingresso_id")
-
-    sql = "DELETE FROM Ingressos WHERE Ingresso_ID = %s"
-    val = (id_ingresso,)
-    cursor.execute(sql, val)
-    db.commit()
-    print("Ingresso excluído com sucesso!")
-
-def excluir_pedido():
+def excluir_pedido(pedido):
     print("Exclusão de Pedido")
     id_pedido = pedido.get("pedido_id")
-
     sql = "DELETE FROM Pedidos WHERE Pedido_ID = %s"
     val = (id_pedido,)
     cursor.execute(sql, val)
     db.commit()
     print("Pedido excluído com sucesso!")
 
-# Funções para uso administrativo
+# Processamento de mensagens
 
-def resetar_contador_id():
-    print("Resetar Contador de IDs")
-    tabela = input("Tabela (Usuarios / Ingressos / Pedidos): ")
+def process_usuario(payload):
+    operacao = payload.get("operacao")
+    if operacao == "Cadastro":
+        cadastrar_usuario(payload)
+    elif operacao == "Edicao":
+        editar_usuario(payload)
+    elif operacao == "Exclusao":
+        excluir_usuario(payload)
+    else:
+        print(f"Operação de usuário desconhecida: {operacao}")
 
-    sql = (f"ALTER TABLE {tabela} AUTO_INCREMENT = 0")
-    cursor.execute(sql)
-    db.commit()
-    print(f"Contador de IDs da tabela {tabela} resetado com sucesso!")
 
-def mostrar_tabela():
-    print("Mostrar Tabela")
-    tabela = input("Tabela (Usuarios / Ingressos / Pedidos): ")
+def process_ingresso(payload):
+    operacao = payload.get("operacao")
+    if operacao == "Cadastro":
+        cadastrar_ingresso(payload)
+    elif operacao == "Edicao":
+        editar_ingresso(payload)
+    elif operacao == "Exclusao":
+        excluir_ingresso(payload)
+    else:
+        print(f"Operação de ingresso desconhecida: {operacao}")
 
-    sql = (f"SELECT * FROM {tabela}")
-    cursor.execute(sql)
-    resultados = cursor.fetchall()
-    for resultado in resultados:
-        print(resultado)
 
-# Criação de uma função para exibir o menu
+def process_pedido(payload):
+    operacao = payload.get("operacao")
+    if operacao == "Cadastro":
+        cadastrar_pedido(payload)
+    elif operacao == "Edicao":
+        editar_pedido(payload)
+    elif operacao == "Exclusao":
+        excluir_pedido(payload)
+    else:
+        print(f"Operação de pedido desconhecida: {operacao}")
 
-def menu_manual():
-    print("Menu:")
-    print("1. Cadastros")
-    print("2. Edições")
-    print("3. Exclusões")
-    print("4. Resetar Contador de IDs")
-    print("5. Mostrar Tabela")
-    print("6. Sair")
-    escolha = input("Escolha uma opção: ")
-    if escolha == "1":
-        print("1. Cadastrar Usuário")
-        print("2. Cadastrar Ingresso")
-        print("3. Cadastrar Pedido")
-        escolha_cadastro = input("Escolha uma opção: ")
-        if escolha_cadastro == "1":
-            cadastrar_usuario()
-        elif escolha_cadastro == "2":
-            cadastrar_ingresso()
-        elif escolha_cadastro == "3":
-            cadastrar_pedido()
-    elif escolha == "2":
-        print("1. Editar Usuário")
-        print("2. Editar Ingresso")
-        print("3. Editar Pedido")
-        escolha_edicao = input("Escolha uma opção: ")
-        if escolha_edicao == "1":
-            editar_usuario()
-        elif escolha_edicao == "2":
-            editar_ingresso()
-        elif escolha_edicao == "3":
-            editar_pedido()
-    elif escolha == "3":
-        print("1. Excluir Usuário")
-        print("2. Excluir Ingresso")
-        print("3. Excluir Pedido")
-        escolha_exclusao = input("Escolha uma opção: ")
-        if escolha_exclusao == "1":
-            excluir_usuario()
-        elif escolha_exclusao == "2":
-            excluir_ingresso()
-        elif escolha_exclusao == "3":
-            excluir_pedido()
-    elif escolha == "4":
-        resetar_contador_id()
-    elif escolha == "5":
-        mostrar_tabela()
-    elif escolha == "6":
-        print("Saindo...")
-        exit()
 
-# Criação de uma função para executar as operações automaticamente com base nos arquivos JSON
+def process_queue(queue_url, processor):
+    payload, receipt_handle = receive_sqs_message(queue_url)
+    if not payload:
+        return False
+    processor(payload)
+    delete_sqs_message(queue_url, receipt_handle)
+    return True
 
-def main_auto():
-    if usuario.get("operacao") == "Cadastro":
-        cadastrar_usuario()
-    elif usuario.get("operacao") == "Edicao":
-        editar_usuario()
-    elif usuario.get("operacao") == "Exclusao":
-        excluir_usuario()
 
-    if ingresso.get("operacao") == "Cadastro":
-        cadastrar_ingresso()
-    elif ingresso.get("operacao") == "Edicao":
-        editar_ingresso()
-    elif ingresso.get("operacao") == "Exclusao":
-        excluir_ingresso()
+def process_sqs_queues():
+    print("Iniciando leitura das filas SQS...")
+    while True:
+        processed = False
+        processed |= process_queue(sqs_url_usuarios, process_usuario)
+        processed |= process_queue(sqs_url_ingressos, process_ingresso)
+        processed |= process_queue(sqs_url_pedidos, process_pedido)
 
-    if pedido.get("operacao") == "Cadastro":
-        cadastrar_pedido()
-    elif pedido.get("operacao") == "Edicao":
-        editar_pedido()
-    elif pedido.get("operacao") == "Exclusao":
-        excluir_pedido()
+        if not processed:
+            print("Nenhuma mensagem na fila no momento. Aguardando 5 segundos...")
+            time.sleep(5)
 
-main_auto()
+if __name__ == "__main__":
+    print("Executando em modo SQS automático. Pressione Ctrl+C para parar.")
+    try:
+        process_sqs_queues()
+    except KeyboardInterrupt:
+        print("Processamento SQS interrompido pelo usuário.")
+    finally:
+        cursor.close()
+        db.close()

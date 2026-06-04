@@ -1,8 +1,0 @@
-{
-    "operacao": "Cadastro",
-    "usuario_id": null,
-    "nome": "Alberto",
-    "email": "Alberto@example.com",
-    "senha": "senha123",
-    "admin": false
-}
