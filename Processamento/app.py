@@ -235,6 +235,63 @@ def excluir_pedido(pedido):
     db.commit()
     log_print("Pedido excluído com sucesso!")
 
+
+def subtrair_estoque(ingresso, pedido):
+    if isinstance(ingresso, dict):
+        ingresso_id = ingresso.get("ingresso_id") or ingresso.get("Ingresso_ID")
+    else:
+        ingresso_id = ingresso
+
+    try:
+        ingresso_id = int(ingresso_id)
+    except Exception:
+        log_print(f"ID de ingresso inválido: {ingresso}", level="ERROR")
+        return False
+
+    qtd_pedido = None
+    if isinstance(pedido, dict):
+        qtd_pedido = pedido.get("quantidade") or pedido.get("Pedido_QNT_Ingressos")
+    else:
+        try:
+            qtd_pedido = int(pedido)
+        except Exception:
+            qtd_pedido = None
+
+    try:
+        qtd_pedido = int(qtd_pedido)
+    except Exception:
+        log_print(f"Quantidade do pedido inválida: {pedido}", level="ERROR")
+        return False
+
+    try:
+        cursor.execute("SELECT Ingresso_Quantidade FROM Ingressos WHERE Ingresso_ID = %s", (ingresso_id,))
+        row = cursor.fetchone()
+        if not row:
+            log_print(f"Ingresso não encontrado (ID {ingresso_id}).", level="ERROR")
+            return False
+        quantidade_atual = int(row[0])
+    except mysql.connector.Error as e:
+        log_print(f"Erro ao buscar quantidade do ingresso: {e}", level="ERROR")
+        return False
+
+    nova_quantidade = quantidade_atual - qtd_pedido
+    if nova_quantidade < 0:
+        log_print(f"Estoque insuficiente para ingresso {ingresso_id}: atual={quantidade_atual}, pedido={qtd_pedido}", level="ERROR")
+        return False
+
+    try:
+        log_print(f"Subtraindo {qtd_pedido} unidades do ingresso {ingresso_id}")
+        sql = "UPDATE Ingressos SET Ingresso_Quantidade = %s WHERE Ingresso_ID = %s"
+        val = (nova_quantidade, ingresso_id)
+        cursor.execute(sql, val)
+        db.commit()
+        log_print(f"Quantidade do ingresso {ingresso_id} atualizada para {nova_quantidade}.")
+        return True
+    except mysql.connector.Error as e:
+        db.rollback()
+        log_print(f"Erro ao atualizar quantidade do ingresso: {e}", level="ERROR")
+        return False
+
 # Processamento de mensagens
 
 def process_usuario(payload):
@@ -264,6 +321,10 @@ def process_ingresso(payload):
 def process_pedido(payload):
     operacao = payload.get("operacao")
     if operacao == "Cadastro":
+        ingresso_id = payload.get("ingresso_id") or payload.get("Ingresso_ID") or payload.get("ingresso")
+        if not subtrair_estoque(ingresso_id, payload):
+            log_print("Pedido não processado: erro ao atualizar estoque.", level="ERROR")
+            return
         cadastrar_pedido(payload)
     elif operacao == "Edicao":
         editar_pedido(payload)
