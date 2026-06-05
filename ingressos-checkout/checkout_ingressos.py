@@ -3,55 +3,45 @@ from datetime import datetime, timedelta
 import random
 import string
 import json
-
-# ──────────────────────────────────────────────
-#  BANCO: DB_Ingressos  (schema do SQL entregue)
-#
-#  Tabelas e colunas reais:
-#  Usuarios  → Usuario_ID, Ususario_Nome, Usuario_Email, Usuario_Senha, Usuario_Admin
-#  Ingressos → Ingresso_ID, Ingresso_Nome, Ingresso_Data, Ingresso_Valor, Ingresso_Quantidade
-#  Pedidos   → Pedido_ID, Usuario_ID, Ingresso_ID, Pedido_Tipo_Pag,
-#               Pedido_QNT_Ingressos, Pedido_Valor
-#
-#  REGRAS:
-#  • Leitura: SELECT em Usuarios e Ingressos (sem UPDATE, sem DELETE)
-#  • Escrita : apenas INSERT em Pedidos
-#  • Ingresso_Valor é INT (centavos) → convertido para reais na exibição
-# ──────────────────────────────────────────────
+import time
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 # ── CONEXÃO ────────────────────────────────────
 
-def conectar_banco():
-    print("Configure a conexão com o banco de dados MySQL")
-    host     = input("Host: ")
-    user     = input("User: ")
-    password = input("Password: ")
-    database = input("Database (padrão DB_Ingressos): ") or "DB_Ingressos"
+print("Configure a conexão com o banco de dados MySQL")
+host     = input("Host: ")
+user     = input("User: ")
+password = input("Password: ")
+database = input("Database (padrão DB_Ingressos): ") or "DB_Ingressos"
+region   = input("AWS Region (padrão us-east-1): ").strip() or "us-east-1"
+sqs_url_entrada = input("URL da fila SQS de Pedidos (deixe vazio para não usar listener): ").strip()
+sqs_url_saida = input("URL da fila SQS de confirmação (deixe vazio para não enviar): ").strip()
 
-    db = mysql.connector.connect(
-        host=host,
-        user=user,
-        password=password,
-        database=database
-    )
-    return db
+db = mysql.connector.connect(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
+
+cursor = db.cursor()
 
 # ── HELPERS ────────────────────────────────────
 
-def formatar_brl(centavos: int) -> str:
-    """Recebe valor em centavos (INT do banco) e retorna string formatada."""
-    reais = centavos / 100
+def formatar_brl(valor: float) -> str:
+    """Recebe valor em reais (float) e retorna string formatada."""
+    try:
+        reais = float(valor)
+    except Exception:
+        reais = 0.0
     return f"R$ {reais:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-def gerar_codigo_pedido() -> str:
-    sufixo = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-    return f"PED-{sufixo}"
 
 # ── LEITURA DO BANCO (somente SELECT) ──────────
 
 def buscar_usuario(cursor, usuario_id: int) -> dict | None:
     cursor.execute(
-        """SELECT Usuario_ID, Ususario_Nome, Usuario_Email
+        """SELECT Usuario_ID, Usuario_Nome, Usuario_Email
            FROM Usuarios
            WHERE Usuario_ID = %s""",
         (usuario_id,)
@@ -79,8 +69,8 @@ def buscar_ingresso(cursor, ingresso_id: int) -> dict | None:
     return {
         "Ingresso_ID":        row[0],
         "Ingresso_Nome":      row[1],
-        "Ingresso_Data":      row[2],           # objeto date do MySQL
-        "Ingresso_Valor":     row[3],           # INT em centavos
+        "Ingresso_Data":      row[2],
+        "Ingresso_Valor":     row[3],
         "Ingresso_Quantidade": row[4],
     }
 
@@ -108,7 +98,7 @@ def listar_pedidos_usuario(cursor, usuario_id: int):
 
 # ── PROCESSAMENTO DE PAGAMENTO ─────────────────
 
-def processar_pagamento_credito(total_centavos: int) -> dict:
+def processar_pagamento_credito(total_reais: float) -> dict:
     print("\n── Pagamento por Cartão de Crédito ──")
     numero   = input("Número do cartão (16 dígitos): ").replace(" ", "")
     nome     = input("Nome no cartão: ")
@@ -123,34 +113,36 @@ def processar_pagamento_credito(total_centavos: int) -> dict:
     if not nome.strip():
         return {"sucesso": False, "mensagem": "Nome do titular não informado."}
 
-    parcela_centavos = total_centavos // parcelas
-    print(f"\n  {parcelas}x de {formatar_brl(parcela_centavos)} — Total: {formatar_brl(total_centavos)}")
+    parcela = float(total_reais) / parcelas
+    print(f"\n  {parcelas}x de {formatar_brl(parcela)} — Total: {formatar_brl(total_reais)}")
 
     # Ponto de integração com gateway (Stripe, Cielo, PagSeguro, etc.)
-    # response = gateway.charge(numero, cvv, validade, total_centavos)
+    # response = gateway.charge(numero, cvv, validade, int(round(total_reais * 100)))
 
     return {
         "sucesso":        True,
         "tipo_pagamento": "credito",
         "parcelas":       parcelas,
-        "total_pago":     total_centavos,
+        "total_pago":     total_reais,
         "mensagem":       "Pagamento no crédito aprovado!",
     }
 
-def processar_pagamento_boleto(total_centavos: int) -> dict:
+def processar_pagamento_boleto(total_reais: float) -> dict:
     print("\n── Pagamento por Boleto Bancário ──")
     vencimento = (datetime.now() + timedelta(days=2)).strftime("%d/%m/%Y")
 
     def _seg():
         return ''.join(random.choices(string.digits, k=5))
 
+    # Para o código numérico usamos centavos sem alterar lógica do layout
+    valor_centavos = str(int(round(float(total_reais) * 100)))
     codigo = (
         f"34191.{_seg()} {_seg()}.{_seg()}0 "
-        f"{_seg()}.{_seg()}0 1 {str(total_centavos).zfill(14)}"
+        f"{_seg()}.{_seg()}0 1 {valor_centavos.zfill(14)}"
     )
 
     print(f"\n  Vencimento : {vencimento}")
-    print(f"  Valor      : {formatar_brl(total_centavos)}")
+    print(f"  Valor      : {formatar_brl(total_reais)}")
     print(f"  Código     : {codigo}")
 
     return {
@@ -158,17 +150,17 @@ def processar_pagamento_boleto(total_centavos: int) -> dict:
         "tipo_pagamento": "boleto",
         "codigo_boleto":  codigo,
         "vencimento":     vencimento,
-        "total_pago":     total_centavos,
+        "total_pago":     total_reais,
         "mensagem":       "Boleto gerado! Pague até o vencimento.",
     }
 
-def processar_pagamento_pix(total_centavos: int) -> dict:
+def processar_pagamento_pix(total_reais: float) -> dict:
     print("\n── Pagamento por PIX ──")
-    chave_pix = "00.000.000/0001-99"   # substitua pela chave real da empresa
+    chave_pix = "00.000.000/0001-99"
     txid = ''.join(random.choices(string.ascii_uppercase + string.digits, k=26))
 
     print(f"\n  Chave PIX  : {chave_pix}")
-    print(f"  Valor      : {formatar_brl(total_centavos)}")
+    print(f"  Valor      : {formatar_brl(total_reais)}")
     print(f"  TXID       : {txid}")
     print("  Confirmação em até 5 minutos após o pagamento.")
 
@@ -177,48 +169,23 @@ def processar_pagamento_pix(total_centavos: int) -> dict:
         "tipo_pagamento": "pix",
         "chave_pix":      chave_pix,
         "txid":           txid,
-        "total_pago":     total_centavos,
+        "total_pago":     total_reais,
         "mensagem":       "PIX gerado! Pague pelo app do seu banco.",
     }
 
-# ── INSERT EM PEDIDOS (única escrita no banco) ──
-
-def registrar_pedido(db, cursor,
-                     usuario_id: int,
-                     ingresso_id: int,
-                     tipo_pagamento: str,
-                     quantidade: int,
-                     total_centavos: int) -> int:
-    """
-    Insere apenas em Pedidos.
-    NÃO altera Ingressos nem Usuarios.
-    Retorna o Pedido_ID gerado.
-    """
-    sql = """
-        INSERT INTO Pedidos
-            (Usuario_ID, Ingresso_ID, Pedido_Tipo_Pag, Pedido_QNT_Ingressos, Pedido_Valor)
-        VALUES (%s, %s, %s, %s, %s)
-    """
-    cursor.execute(sql, (usuario_id, ingresso_id, tipo_pagamento, quantidade, total_centavos))
-    db.commit()
-    return cursor.lastrowid
-
 # ── CONFIRMAR PEDIDO: retorna JSON ──────────────
 
-def confirmar_pedido_json(pedido_id: int,
-                          usuario: dict,
+def confirmar_pedido_json(usuario: dict,
                           ingresso: dict,
                           resultado: dict,
                           quantidade: int,
-                          total_centavos: int) -> str:
+                          total_valor: float) -> str:
     """
     Monta e retorna o JSON de confirmação do pedido.
     Esse JSON pode ser exibido ao usuário ou enviado ao front-end.
     """
     confirmacao = {
         "status":      "confirmado",
-        "Pedido_ID":   pedido_id,
-        "codigo":      gerar_codigo_pedido(),
         "usuario": {
             "Usuario_ID": usuario["Usuario_ID"],
             "Nome":       usuario["Nome"],
@@ -232,8 +199,8 @@ def confirmar_pedido_json(pedido_id: int,
         "pagamento": {
             "Pedido_Tipo_Pag":      resultado["tipo_pagamento"],
             "Pedido_QNT_Ingressos": quantidade,
-            "Pedido_Valor":         total_centavos,
-            "Pedido_Valor_BRL":     formatar_brl(total_centavos),
+            "Pedido_Valor":         total_valor,
+            "Pedido_Valor_BRL":     formatar_brl(total_valor),
         },
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -249,6 +216,23 @@ def confirmar_pedido_json(pedido_id: int,
         confirmacao["pagamento"]["parcelas"] = resultado["parcelas"]
 
     return json.dumps(confirmacao, ensure_ascii=False, indent=2)
+
+def json_envio(usuario: dict, 
+               ingresso: dict, 
+               resultado: dict, 
+               quantidade: int, 
+               total_valor: float) -> str:
+
+    json_processamento = {
+        "operacao": "Cadastro",
+        "usuario_id": usuario["Usuario_ID"],
+        "ingresso_id": ingresso["Ingresso_ID"],
+        "tipo_pagamento": resultado["tipo_pagamento"],
+        "quantidade": quantidade,
+        "valor_total": total_valor
+    }
+
+    return json.dumps(json_processamento, ensure_ascii=False, indent=1)
 
 # ── FLUXO PRINCIPAL DE CHECKOUT ─────────────────
 
@@ -276,9 +260,9 @@ def realizar_checkout(db, cursor):
         print(f"✗ Estoque insuficiente! Disponível: {ingresso['Ingresso_Quantidade']}")
         return
 
-    # 3. Cálculo do total (Ingresso_Valor já está em centavos)
-    subtotal     = ingresso["Ingresso_Valor"] * quantidade   # centavos
-    taxa         = int(subtotal * 0.10)                       # 10% taxa de serviço
+    # 3. Cálculo do total (Ingresso_Valor está em reais - float)
+    subtotal     = float(ingresso["Ingresso_Valor"]) * quantidade   # reais
+    taxa         = subtotal * 0.10                                   # 10% taxa de serviço
     total        = subtotal + taxa
 
     print(f"""
@@ -286,10 +270,10 @@ def realizar_checkout(db, cursor):
   │ Comprador  : {usuario['Nome']}
   │ Evento     : {ingresso['Ingresso_Nome']}
   │ Data       : {ingresso['Ingresso_Data']}
-  │ Quantidade : {quantidade}x {formatar_brl(ingresso['Ingresso_Valor'])}
-  │ Subtotal   : {formatar_brl(subtotal)}
-  │ Taxa (10%) : {formatar_brl(taxa)}
-  │ TOTAL      : {formatar_brl(total)}
+    │ Quantidade : {quantidade}x {formatar_brl(ingresso['Ingresso_Valor'])}
+    │ Subtotal   : {formatar_brl(subtotal)}
+    │ Taxa (10%) : {formatar_brl(taxa)}
+    │ TOTAL      : {formatar_brl(total)}
   └─────────────────────────────────────────────┘""")
 
     # 4. Forma de pagamento
@@ -318,23 +302,27 @@ def realizar_checkout(db, cursor):
         print(f"\n✗ Pagamento recusado: {resultado['mensagem']}")
         return
 
-    # 6. INSERT em Pedidos (único ponto de escrita)
+    # 7. Gerar e exibir JSON de confirmação
     try:
-        pedido_id = registrar_pedido(
-            db, cursor,
-            usuario_id, ingresso_id,
-            tipo_pagamento, quantidade,
+        json_confirmacao = confirmar_pedido_json(
+            usuario,
+            ingresso,
+            resultado,
+            quantidade,
             total
         )
 
-        # 7. Gerar e exibir JSON de confirmação
-        json_confirmacao = confirmar_pedido_json(
-            pedido_id, usuario, ingresso,
-            resultado, quantidade, total
+        json_processamento = json_envio(
+            usuario,
+            ingresso,
+            resultado,
+            quantidade,
+            total
         )
 
         print("\n✓ PEDIDO CONFIRMADO — JSON de confirmação:\n")
         print(json_confirmacao)
+        print(json_processamento)
 
         return json_confirmacao
 
@@ -346,12 +334,11 @@ def realizar_checkout(db, cursor):
 # ── PONTO DE ENTRADA ────────────────────────────
 
 if __name__ == "__main__":
-    db     = conectar_banco()
-    cursor = db.cursor()
-
+    
     print("\nO que deseja fazer?")
-    print("  1 - Realizar checkout")
+    print("  1 - Realizar checkout interativo")
     print("  2 - Ver pedidos de um usuário")
+    print("  3 - Executar listener SQS para fila de Pedidos (processa apenas 'Cadastro')")
     opcao = input("Opção: ").strip()
 
     if opcao == "1":
@@ -359,6 +346,128 @@ if __name__ == "__main__":
     elif opcao == "2":
         uid = int(input("ID do usuário: "))
         listar_pedidos_usuario(cursor, uid)
+    elif opcao == "3":
+        if not sqs_url_entrada:
+            print("URL da fila de Pedidos é obrigatória.")
+        else:
+            sqs = boto3.client("sqs", region_name=region)
+
+            def parse_sqs_body(body):
+                if isinstance(body, str):
+                    try:
+                        return json.loads(body)
+                    except json.JSONDecodeError:
+                        return None
+                if isinstance(body, dict):
+                    return body
+                return None
+
+            def receive_sqs_message(queue_url):
+                try:
+                    response = sqs.receive_message(
+                        QueueUrl=queue_url,
+                        MaxNumberOfMessages=1,
+                        WaitTimeSeconds=10,
+                        VisibilityTimeout=30
+                    )
+                except (BotoCoreError, ClientError) as err:
+                    print(f"Erro ao receber mensagem SQS: {err}")
+                    return None, None
+
+                messages = response.get("Messages")
+                if not messages:
+                    return None, None
+
+                message = messages[0]
+                receipt_handle = message.get("ReceiptHandle")
+                body = message.get("Body")
+                payload = parse_sqs_body(body)
+                return payload, receipt_handle
+
+            def delete_sqs_message(queue_url, receipt_handle):
+                if not receipt_handle:
+                    return
+                try:
+                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+                except (BotoCoreError, ClientError) as err:
+                    print(f"Erro ao excluir mensagem SQS: {err}")
+
+            def send_sqs_message(queue_url, message_body):
+                if not queue_url:
+                    return
+                try:
+                    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps(message_body, ensure_ascii=False))
+                except (BotoCoreError, ClientError) as err:
+                    print(f"Erro ao enviar mensagem SQS: {err}")
+
+            def process_pedido_message(payload):
+                # Espera payload com campos: operacao='Cadastro', usuario_id, ingresso_id, quantidade, tipo_pagamento, valor_total
+                if not payload:
+                    return False
+                oper = payload.get("operacao")
+                if oper != "Cadastro":
+                    print(f"Ignorando operacao de pedido: {oper}")
+                    return False
+
+                usuario_id = payload.get("usuario_id")
+                ingresso_id = payload.get("ingresso_id")
+                quantidade = int(payload.get("quantidade", 0))
+                tipo_pagamento = payload.get("tipo_pagamento")
+                try:
+                    valor_total = float(payload.get("valor_total", 0))
+                except Exception:
+                    valor_total = 0.0
+
+                if not all([usuario_id, ingresso_id, quantidade, tipo_pagamento, valor_total]):
+                    print("Payload de pedido incompleto. Pulando.")
+                    return False
+
+                usuario = buscar_usuario(cursor, int(usuario_id))
+                ingresso = buscar_ingresso(cursor, int(ingresso_id))
+
+                if not usuario:
+                    print("Usuário do pedido não encontrado. Pulando.")
+                    return False
+                if not ingresso:
+                    print("Ingresso do pedido não encontrado. Pulando.")
+                    return False
+                if ingresso["Ingresso_Quantidade"] < quantidade:
+                    print("Estoque insuficiente para o pedido. Pulando.")
+                    return False
+
+                resultado = {
+                    "sucesso": True,
+                    "tipo_pagamento": tipo_pagamento,
+                    "total_pago": valor_total
+                }
+
+                json_confirmacao = confirmar_pedido_json(usuario, ingresso, resultado, quantidade, valor_total)
+                json_processamento = json_envio(usuario, ingresso, resultado, quantidade, valor_total)
+                print("Pedido processado e confirmado:")
+                print(json_confirmacao)
+
+                # Envia confirmação para fila de saída, se configurada
+                if sqs_url_saida:
+                    try:
+                        send_sqs_message(sqs_url_saida, json.loads(json_processamento))
+                    except Exception as e:
+                        print(f"Falha ao enviar confirmacao SQS: {e}")
+
+                return True
+
+            print("Iniciando listener SQS para Pedidos. Ctrl+C para parar.")
+            try:
+                while True:
+                    payload, receipt = receive_sqs_message(sqs_url_entrada)
+                    if not payload:
+                        time.sleep(2)
+                        continue
+                    processed = process_pedido_message(payload)
+                    if processed:
+                        delete_sqs_message(sqs_url_entrada, receipt)
+            except KeyboardInterrupt:
+                print("Listener SQS interrompido pelo usuário.")
+
     else:
         print("Opção inválida.")
 
