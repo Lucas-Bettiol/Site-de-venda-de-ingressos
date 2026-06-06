@@ -7,9 +7,13 @@ from botocore.exceptions import BotoCoreError, ClientError
 import threading
 from collections import deque
 from datetime import datetime
+from dotenv import load_dotenv
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 # Logging utilities
-LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
+LOG_DIR = os.path.join(BASE_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "processamento.log")
 _LOG_BUFFER = deque(maxlen=1000)
@@ -48,16 +52,29 @@ def log_print(message, level="INFO"):
     store_log(message, level)
 
 
-# Configurações
-log_print("Configure as conexões com o banco de dados e AWS SQS:")
-rds_host = input("Host: ")
-rds_user = input("User: ")
-rds_password = input("Password: ")
-rds_database = input("Database: ")
-regiao = os.getenv("AWS_REGION", "us-east-1")
-sqs_url_usuarios = input("URL da fila SQS de Usuários: ")
-sqs_url_ingressos = input("URL da fila SQS de Ingressos: ")
-sqs_url_pedidos = input("URL da fila SQS de Pedidos: ")
+def get_setting(env_key: str, prompt: str, default: str = "") -> str:
+    value = os.getenv(env_key, "").strip()
+    if value:
+        return value
+    if default:
+        answer = input(f"{prompt} [{default}]: ").strip()
+        return answer or default
+    return input(f"{prompt}: ").strip()
+
+
+# Configurações (arquivo .env na pasta Processamento/)
+log_print("Carregando configuração — use o arquivo .env ou responda aos prompts:")
+rds_host = get_setting("DB_HOST", "Host")
+rds_user = get_setting("DB_USER", "User")
+rds_password = get_setting("DB_PASSWORD", "Password")
+rds_database = get_setting("DB_NAME", "Database", "DB_Ingressos")
+regiao = get_setting("AWS_REGION", "AWS Region", "us-east-1")
+sqs_url_usuarios = get_setting("SQS_URL_USUARIOS", "URL da fila SQS de Usuários")
+sqs_url_ingressos = get_setting("SQS_URL_INGRESSOS", "URL da fila SQS de Ingressos")
+sqs_url_pedidos = get_setting("SQS_URL_PEDIDOS", "URL da fila SQS de Pedidos")
+
+if os.getenv("DB_HOST"):
+    log_print("Configuração carregada do arquivo .env")
 
 # Conexão com o banco de dados
 try:
