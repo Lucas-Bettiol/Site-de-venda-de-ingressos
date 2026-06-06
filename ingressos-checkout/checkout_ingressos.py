@@ -1,3 +1,4 @@
+import os
 import mysql.connector
 from datetime import datetime, timedelta
 import random
@@ -6,17 +7,41 @@ import json
 import time
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+from dotenv import load_dotenv
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+
+def get_setting(env_key: str, prompt: str, default: str = "") -> str:
+    value = os.getenv(env_key, "").strip()
+    if value:
+        return value
+    if default:
+        answer = input(f"{prompt} [{default}]: ").strip()
+        return answer or default
+    return input(f"{prompt}: ").strip()
+
 
 # ── CONEXÃO ────────────────────────────────────
 
-print("Configure a conexão com o banco de dados MySQL")
-host     = input("Host: ")
-user     = input("User: ")
-password = input("Password: ")
-database = input("Database (padrão DB_Ingressos): ") or "DB_Ingressos"
-region   = input("AWS Region (padrão us-east-1): ").strip() or "us-east-1"
-sqs_url_entrada = input("URL da fila SQS de Pedidos (deixe vazio para não usar listener): ").strip()
-sqs_url_saida = input("URL da fila SQS de confirmação (deixe vazio para não enviar): ").strip()
+print("Carregando configuração — use o arquivo .env ou responda aos prompts:")
+host = get_setting("DB_HOST", "Host")
+user = get_setting("DB_USER", "User")
+password = get_setting("DB_PASSWORD", "Password")
+database = get_setting("DB_NAME", "Database", "DB_Ingressos")
+region = get_setting("AWS_REGION", "AWS Region", "us-east-1")
+sqs_url_entrada = get_setting(
+    "SQS_URL_PEDIDOS",
+    "URL da fila SQS de Pedidos (deixe vazio para não usar listener)",
+)
+sqs_url_saida = get_setting(
+    "SQS_URL_SAIDA",
+    "URL da fila SQS de confirmação (deixe vazio para não enviar)",
+)
+
+if os.getenv("DB_HOST"):
+    print("Configuração carregada do arquivo .env")
 
 db = mysql.connector.connect(
     host=host,
