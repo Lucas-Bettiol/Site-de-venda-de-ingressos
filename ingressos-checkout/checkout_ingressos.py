@@ -152,51 +152,92 @@ def processar_pagamento_credito(total_reais: float) -> dict:
         "mensagem":       "Pagamento no crédito aprovado!",
     }
 
-def processar_pagamento_boleto(total_reais: float) -> dict:
-    print("\n── Pagamento por Boleto Bancário ──")
+def _gerar_dados_boleto(total_reais: float) -> dict:
     vencimento = (datetime.now() + timedelta(days=2)).strftime("%d/%m/%Y")
 
     def _seg():
         return ''.join(random.choices(string.digits, k=5))
 
-    # Para o código numérico usamos centavos sem alterar lógica do layout
     valor_centavos = str(int(round(float(total_reais) * 100)))
     codigo = (
         f"34191.{_seg()} {_seg()}.{_seg()}0 "
         f"{_seg()}.{_seg()}0 1 {valor_centavos.zfill(14)}"
     )
+    return {
+        "sucesso": True,
+        "tipo_pagamento": "boleto",
+        "codigo_boleto": codigo,
+        "vencimento": vencimento,
+        "total_pago": total_reais,
+        "mensagem": "Boleto gerado! Pague até o vencimento.",
+    }
 
-    print(f"\n  Vencimento : {vencimento}")
-    print(f"  Valor      : {formatar_brl(total_reais)}")
-    print(f"  Código     : {codigo}")
+
+def _gerar_dados_pix(total_reais: float) -> dict:
+    chave_pix = "00.000.000/0001-99"
+    txid = ''.join(random.choices(string.ascii_uppercase + string.digits, k=26))
+    return {
+        "sucesso": True,
+        "tipo_pagamento": "pix",
+        "chave_pix": chave_pix,
+        "txid": txid,
+        "total_pago": total_reais,
+        "mensagem": "PIX gerado! Pague pelo app do seu banco.",
+    }
+
+
+def build_resultado_pagamento(tipo_pagamento: str, valor_total: float, pagamento: dict | None = None) -> dict:
+    """Monta o dict resultado exigido por confirmar_pedido_json."""
+    pagamento = pagamento or {}
+    tipo = (tipo_pagamento or "").strip().lower()
+
+    if tipo == "credito":
+        parcelas = int(pagamento.get("parcelas", 1))
+        return {
+            "sucesso": True,
+            "tipo_pagamento": "credito",
+            "parcelas": parcelas,
+            "total_pago": valor_total,
+            "mensagem": "Pagamento no crédito aprovado!",
+        }
+    if tipo == "boleto":
+        resultado = _gerar_dados_boleto(valor_total)
+        if pagamento.get("nome_pagador"):
+            resultado["nome_pagador"] = pagamento["nome_pagador"]
+        if pagamento.get("cpf"):
+            resultado["cpf_pagador"] = pagamento["cpf"]
+        return resultado
+    if tipo == "pix":
+        resultado = _gerar_dados_pix(valor_total)
+        if pagamento.get("cpf_pagador"):
+            resultado["cpf_pagador"] = pagamento["cpf_pagador"]
+        return resultado
 
     return {
-        "sucesso":        True,
-        "tipo_pagamento": "boleto",
-        "codigo_boleto":  codigo,
-        "vencimento":     vencimento,
-        "total_pago":     total_reais,
-        "mensagem":       "Boleto gerado! Pague até o vencimento.",
+        "sucesso": True,
+        "tipo_pagamento": tipo,
+        "total_pago": valor_total,
+        "mensagem": "Pagamento processado.",
     }
+
+
+def processar_pagamento_boleto(total_reais: float) -> dict:
+    print("\n── Pagamento por Boleto Bancário ──")
+    resultado = _gerar_dados_boleto(total_reais)
+    print(f"\n  Vencimento : {resultado['vencimento']}")
+    print(f"  Valor      : {formatar_brl(total_reais)}")
+    print(f"  Código     : {resultado['codigo_boleto']}")
+    return resultado
+
 
 def processar_pagamento_pix(total_reais: float) -> dict:
     print("\n── Pagamento por PIX ──")
-    chave_pix = "00.000.000/0001-99"
-    txid = ''.join(random.choices(string.ascii_uppercase + string.digits, k=26))
-
-    print(f"\n  Chave PIX  : {chave_pix}")
+    resultado = _gerar_dados_pix(total_reais)
+    print(f"\n  Chave PIX  : {resultado['chave_pix']}")
     print(f"  Valor      : {formatar_brl(total_reais)}")
-    print(f"  TXID       : {txid}")
+    print(f"  TXID       : {resultado['txid']}")
     print("  Confirmação em até 5 minutos após o pagamento.")
-
-    return {
-        "sucesso":        True,
-        "tipo_pagamento": "pix",
-        "chave_pix":      chave_pix,
-        "txid":           txid,
-        "total_pago":     total_reais,
-        "mensagem":       "PIX gerado! Pague pelo app do seu banco.",
-    }
+    return resultado
 
 # ── CONFIRMAR PEDIDO: retorna JSON ──────────────
 
@@ -460,11 +501,12 @@ if __name__ == "__main__":
                     print("Estoque insuficiente para o pedido. Pulando.")
                     return False
 
-                resultado = {
-                    "sucesso": True,
-                    "tipo_pagamento": tipo_pagamento,
-                    "total_pago": valor_total
-                }
+                pagamento_extra = payload.get("pagamento") or {}
+                resultado = build_resultado_pagamento(
+                    tipo_pagamento,
+                    valor_total,
+                    pagamento_extra if isinstance(pagamento_extra, dict) else {},
+                )
 
                 json_confirmacao = confirmar_pedido_json(usuario, ingresso, resultado, quantidade, valor_total)
                 json_processamento = json_envio(usuario, ingresso, resultado, quantidade, valor_total)
@@ -498,3 +540,4 @@ if __name__ == "__main__":
 
     cursor.close()
     db.close()
+
