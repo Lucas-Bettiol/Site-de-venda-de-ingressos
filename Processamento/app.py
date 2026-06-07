@@ -369,8 +369,7 @@ def process_sqs_queues():
         processed |= process_queue(sqs_url_pedidos, process_pedido)
 
         if not processed:
-            log_print("Nenhuma mensagem na fila no momento. Aguardando 5 segundos...")
-            time.sleep(5)
+            time.sleep(1)
 
 
 def command_listener():
