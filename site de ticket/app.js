@@ -313,6 +313,10 @@ function setBtnLoading(btn, loading, label = 'Processando...') {
 
 function showToast(msg, type = 'info') {
   const container = document.getElementById('toastContainer');
+  if (!container) {
+    console.warn('Toast container não encontrado:', msg);
+    return;
+  }
   const icons = { success: '✓', error: '✕', info: 'ℹ' };
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
