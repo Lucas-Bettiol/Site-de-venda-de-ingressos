@@ -40,6 +40,12 @@ sqs_url_saida = get_setting(
     "URL da fila SQS de confirmação (deixe vazio para não enviar)",
 )
 
+sqs_url_saida_web = get_setting(
+    "SQS_URL_SAIDA_WEB",
+    "URL da fila SQS de confirmação para o frontend web (deixe vazio para não enviar)",
+)
+
+
 if os.getenv("DB_HOST"):
     print("Configuração carregada do arquivo .env")
 
@@ -51,6 +57,9 @@ db = mysql.connector.connect(
 )
 
 cursor = db.cursor()
+# Garantir que cada consulta veja atualizações externas imediatamente
+# (evita cache de transação que impede SELECTs de ver novos registros)
+db.autocommit = True
 
 # ── HELPERS ────────────────────────────────────
 
@@ -519,6 +528,12 @@ if __name__ == "__main__":
                         send_sqs_message(sqs_url_saida, json.loads(json_processamento))
                     except Exception as e:
                         print(f"Falha ao enviar confirmacao SQS: {e}")
+
+                if sqs_url_saida_web:
+                    try:
+                        send_sqs_message(sqs_url_saida_web, json.loads(json_confirmacao))
+                    except Exception as e:
+                        print(f"Falha ao enviar confirmacao SQS para o frontend web: {e}")
 
                 return True
 
