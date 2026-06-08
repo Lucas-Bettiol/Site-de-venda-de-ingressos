@@ -325,6 +325,48 @@ function showToast(msg, type = 'info') {
   setTimeout(() => toast.remove(), 4000);
 }
 
+function renderConfirmacaoModal(confirmacao) {
+  if (!confirmacao) return;
+
+  document.getElementById('confirmacaoStatus').textContent = confirmacao.status || 'confirmado';
+  document.getElementById('confirmacaoUsuarioNome').textContent = confirmacao.usuario?.Nome || '';
+  document.getElementById('confirmacaoUsuarioEmail').textContent = confirmacao.usuario?.Email || '';
+  document.getElementById('confirmacaoIngressoNome').textContent = confirmacao.ingresso?.Ingresso_Nome || '';
+  document.getElementById('confirmacaoIngressoData').textContent = fmt.date(confirmacao.ingresso?.Ingresso_Data);
+  document.getElementById('confirmacaoQuantidade').textContent = confirmacao.pagamento?.Pedido_QNT_Ingressos || 0;
+  document.getElementById('confirmacaoMetodo').textContent = fmt.method(confirmacao.pagamento?.Pedido_Tipo_Pag);
+  document.getElementById('confirmacaoTotal').textContent = fmt.currency(confirmacao.pagamento?.Pedido_Valor || 0);
+  document.getElementById('confirmacaoTimestamp').textContent = confirmacao.timestamp || '';
+
+  const extraContainer = document.getElementById('confirmacaoExtraContainer');
+  const extra = document.getElementById('confirmacaoExtra');
+  if (extra && extraContainer) {
+    const pagamento = confirmacao.pagamento || {};
+    const tipo = (pagamento.Pedido_Tipo_Pag || '').toLowerCase();
+    let detailHtml = '';
+
+    if (tipo === 'boleto') {
+      detailHtml += `<div>Código do boleto: ${pagamento.codigo_boleto || '—'}</div>`;
+      detailHtml += `<div>Vencimento: ${pagamento.vencimento || '—'}</div>`;
+    } else if (tipo === 'pix') {
+      detailHtml += `<div>Chave PIX: ${pagamento.chave_pix || '—'}</div>`;
+      detailHtml += `<div>TXID: ${pagamento.txid || '—'}</div>`;
+    } else if (tipo === 'credito') {
+      detailHtml += `<div>Parcelas: ${pagamento.parcelas || 1}x</div>`;
+    }
+
+    if (detailHtml) {
+      extra.innerHTML = detailHtml;
+      extraContainer.style.display = 'block';
+    } else {
+      extra.innerHTML = '';
+      extraContainer.style.display = 'none';
+    }
+  }
+
+  openModal('confirmacaoModal');
+}
+
 function openModal(id)  { document.getElementById(id)?.classList.add('open'); }
 function closeModal(id) { document.getElementById(id)?.classList.remove('open'); }
 
@@ -598,8 +640,13 @@ async function handleCompra() {
     });
 
     closeModal('compraModal');
-    showToast(`Pedido enviado para fila SQS — ${ing.nome} (${qtd}x)`, 'success');
-    console.log('Payload SQS:', result.payload);
+    if (result.confirmacao) {
+      renderConfirmacaoModal(result.confirmacao);
+      showToast(`Pedido confirmado para ${ing.nome} (${qtd}x)`, 'success');
+    } else {
+      showToast(`Pedido enviado para processamento — ${ing.nome} (${qtd}x)`, 'success');
+    }
+    console.log('Payload SQS:', result.payload, result.confirmacao);
 
     await refreshClientState();
   } catch (err) {
@@ -645,12 +692,9 @@ function loadAdminTab(tab) {
       <div class="section-header">
         <div>
           <div class="section-title">Ingressos</div>
-          <div class="section-subtitle">Gerenciamento de eventos — escrita via fila SQS</div>
+          <div class="section-subtitle">Gerenciamento de eventos</div>
         </div>
         <button class="btn btn-secondary btn-sm" onclick="openIngressoForm('Cadastro')">+ Novo Ingresso</button>
-      </div>
-      <div class="alert alert-info">
-        ℹ️ Cadastro, edição e exclusão são enviados para a fila <strong>SQS de Ingressos</strong> e processados pelo serviço de processamento.
       </div>
       <div class="table-wrapper">
         <table>
@@ -685,7 +729,7 @@ function loadAdminTab(tab) {
       <div class="section-header">
         <div>
           <div class="section-title">Pedidos</div>
-          <div class="section-subtitle">Histórico de compras no banco (RDS)</div>
+          <div class="section-subtitle">Histórico de compras</div>
         </div>
         <div class="flex gap-1 items-center">
           <span class="badge badge-info">Via SQS</span>
@@ -720,7 +764,7 @@ function loadAdminTab(tab) {
       <div class="section-header">
         <div>
           <div class="section-title">Usuários</div>
-          <div class="section-subtitle">Cadastro via fila SQS de Usuários</div>
+          <div class="section-subtitle">Cadastro de Usuários</div>
         </div>
         <button class="btn btn-secondary btn-sm" onclick="openUsuarioForm('Cadastro')">+ Novo Usuário</button>
       </div>
@@ -768,18 +812,9 @@ function loadAdminTab(tab) {
           <div class="stat-value">${stats.ingressosDisponiveis || 0}</div>
         </div>
       </div>
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem">        
         <div class="card">
-          <div class="card-header"><span class="card-title">Fluxo AWS</span><span class="badge badge-info">Arquitetura</span></div>
-          <div style="font-size:0.85rem; color: var(--text-muted); line-height: 2">
-            <div>🌐 <strong style="color:var(--text)">Web (EC2)</strong> → API Flask</div>
-            <div>📦 <strong style="color:var(--text)">SQS Pedidos</strong> → Checkout / Pagamento</div>
-            <div>✅ <strong style="color:var(--text)">SQS Processamento</strong> → RDS MySQL</div>
-            <div>📊 <strong style="color:var(--text)">RDS</strong> → Leitura em tempo real</div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-header"><span class="card-title">Tabelas do Banco</span><span class="badge badge-muted">MySQL</span></div>
+          <div class="card-header"><span class="card-title">Tabelas do Banco</span></div>
           <div style="font-size:0.82rem; color: var(--text-muted); line-height:2">
             <div>👤 usuarios — ${stats.totalUsuarios || 0}</div>
             <div>🎟 ingressos — ${stats.totalIngressos || 0}</div>
@@ -841,10 +876,10 @@ async function submitIngressoForm(e) {
 }
 
 async function excluirIngresso(id, nome) {
-  if (!confirm(`Excluir ingresso "${nome}"? A mensagem será enviada para a fila SQS.`)) return;
+  if (!confirm(`Excluir ingresso "${nome}"? A mensagem será enviada para processamento.`)) return;
   try {
     await api.sqsIngresso({ operacao: 'Exclusao', ingresso_id: id });
-    showToast('Exclusão enviada para SQS', 'success');
+    showToast('Exclusão enviada para processamento', 'success');
     setTimeout(async () => {
       await loadIngressos();
       loadAdminTab('ingressos');
@@ -893,7 +928,7 @@ async function submitUsuarioForm(e) {
   try {
     await api.sqsUsuario(payload);
     closeModal('usuarioModal');
-    showToast(`Usuário enviado para SQS (${operacao})`, 'success');
+    showToast(`Usuário enviado para processamento (${operacao})`, 'success');
     setTimeout(async () => {
       await loadUsuarios();
       loadAdminTab('usuarios');
@@ -907,10 +942,10 @@ async function submitUsuarioForm(e) {
 }
 
 async function excluirUsuario(id, nome) {
-  if (!confirm(`Excluir usuário "${nome}"? A mensagem será enviada para a fila SQS.`)) return;
+  if (!confirm(`Excluir usuário "${nome}"?`)) return;
   try {
     await api.sqsUsuario({ operacao: 'Exclusao', usuario_id: id });
-    showToast('Exclusão enviada para SQS', 'success');
+    showToast('Exclusão enviada para processamento', 'success');
     setTimeout(async () => {
       await loadUsuarios();
       loadAdminTab('usuarios');
